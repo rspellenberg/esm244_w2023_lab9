@@ -1,0 +1,121 @@
+---
+title: "lab9_part1"
+author: "R. Spellenberg"
+date: "2023-03-14"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(here)
+library(tsibble) ### time series
+library(feasts)
+library(fable)
+library(broom)
+```
+
+## Read in our energy data and convert to a tsibble
+
+Data here are from the US Energy Information Administration. US Residential energy consumption from Jan 1973 - Oct 2017. Units = trillions of BTUs
+
+```{r}
+energy_df <- read_csv(here('data/energy.csv'))
+
+energy_ts <- energy_df %>% 
+  mutate(date = tsibble::yearmonth(month)) %>% 
+  as_tsibble(key = NULL, index = date ) ### index tells what column to look at
+
+### head(energy_ts) in console tells us class of columns
+```
+
+## Exploratory times series visualization
+
+```{r}
+ggplot(data = energy_ts, aes(x = date, y = res_total)) +
+  geom_line() +
+  labs(y = 'Residential energy consumption\n (Trillion BTU)') +
+  theme_minimal()
+```
+
+### Season Plot
+
+```{r}
+energy_ts %>% 
+  gg_season(y = res_total) + ### feasts package
+  theme_minimal() +
+  scale_color_viridis_c() +
+  labs(x = 'Month', y = 'Residential energy consumption\n (Trillion BTU)')
+```
+
+### Subseries plot
+
+```{r}
+energy_ts %>% 
+  gg_subseries(y = res_total)
+```
+
+## Decomposition
+
+STL decomposition vs. classical decomposition - classical has same seasonality over entire time series, but STL allows seasonality to change over time
+```{r}
+### calculate STL decomposition
+dcmp <- energy_ts %>% 
+  model(STL(res_total ~ season()))
+
+### components(dcmp) in console
+
+### visualize
+components(dcmp) %>% 
+  autoplot() + 
+  theme_minimal()
+```
+
+## Autocorrelation function (ACF)
+
+```{r}
+energy_ts %>% 
+  ACF(y = res_total) %>%  ###feasts package
+  autoplot() +
+  theme_minimal()
+```
+
+## Forecasting Holt-Winters exponential smoothing
+(fits with certain types of seasonality)
+exponential smoothing is paying attention more to recent events
+
+```{r}
+### create our model
+energy_fit <- energy_ts %>% 
+  model(ets = ETS(res_total ~ season('M'))) ### M for multiplicative, A for additive
+
+### create forecast based on our model, 10 years into the future
+energy_forecast <- energy_fit %>% 
+  forecast(h = '10 years') ### how far into the future we're going to predict
+
+energy_forecast %>% 
+  autoplot()
+
+```
+
+Now plot the actual res_total values on top of the predicted values
+
+```{r}
+### append the predicted values (and residuals) to the original energy data
+energy_predicted <- broom::augment(energy_fit)
+
+ggplot(data = energy_predicted) +
+  geom_line(aes(x = date, y = res_total), color = 'black') +
+  geom_line(aes(x = date, y = .fitted), color = 'red', alpha = 0.7)
+
+### want uncorrelated residuals and centered around 0 (mean of 0)/normally distributed
+ggplot(data = energy_predicted, aes(x = .resid)) +
+  geom_histogram()
+
+ggplot(data = energy_predicted, aes(x = date, y = .resid)) +
+  geom_point()
+```
+
+
