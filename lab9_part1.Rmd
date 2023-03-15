@@ -7,8 +7,8 @@ output:
     code_folding: hide
 ---
 
-```{r setup, message = FALSE, warning = FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(here)
 library(tsibble) ### time series
@@ -24,8 +24,9 @@ Data here are from the US Energy Information Administration. US Residential ener
 ```{r}
 energy_df <- read_csv(here('data/energy.csv'))
 
-energy_ts <- energy_df %>% 
-  mutate(date = tsibble::yearmonth(month)) %>% 
+energy_ts <- energy_df %>%
+  mutate(ym = lubridate::ym(month)) %>% 
+  mutate(date = tsibble::yearmonth(ym)) %>% 
   as_tsibble(key = NULL, index = date ) ### index tells what column to look at
 
 ### head(energy_ts) in console tells us class of columns
