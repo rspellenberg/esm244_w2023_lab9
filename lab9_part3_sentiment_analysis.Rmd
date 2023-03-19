@@ -1,0 +1,241 @@
+---
+title: "lab9_part3_sentiment_analysis"
+author: "R. Spellenberg"
+date: "2023-03-19"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(tidytext)
+library(textdata)
+library(pdftools)
+library(ggwordcloud)
+
+```
+
+## Get The Hobbit
+```{r}
+hobbit_text <- pdf_text(here::here('data/the-hobbit.pdf'))
+
+hobbit_p34 <- hobbit_text[34]
+```
+
+
+## Workshop that Casey put together
+https://github.com/oharac/text_workshop
+
+
+## Get the text into a dataframe
+```{r}
+hobbit_lines <- data.frame(hobbit_text) %>% 
+  mutate(page = 1:n()) %>% 
+  mutate(text_full = str_split(hobbit_text, pattern = '\n')) %>% 
+  unnest(text_full) %>% 
+  mutate(text_full = str_squish(text_full))
+```
+
+## Let's do some tidying
+
+```{r}
+hobbit_chapts <- hobbit_lines %>% 
+  slice(-(1:137)) %>% 
+  mutate(chapter = ifelse(str_detect(text_full, 'Chapter'), text_full, NA)) %>% 
+  fill(chapter, .direction = 'down') %>% 
+  separate(col = chapter, into = c('ch', 'num'), sep = ' ') %>% 
+  mutate(chapter = as.numeric(as.roman(num)))
+```
+
+## Get word count by chapter!
+
+```{r}
+hobbit_words <- hobbit_chapts %>% 
+  unnest_tokens(word, text_full, token = 'words')
+
+hobbit_wordcount <- hobbit_words %>% 
+  # group_by(chapter, word) %>%
+  # summarize(n = n())
+  count(chapter, word)
+  
+```
+
+
+## Remove stop words
+
+```{r}
+x <- stop_words
+
+hobbit_words_clean <- hobbit_words %>% 
+  anti_join(stop_words, by = 'word')
+
+non_stop_counts <- hobbit_words_clean %>% 
+  count(chapter, word)
+```
+
+
+## Find the top 5 words from each chapter
+
+```{r}
+top_5_words <- non_stop_counts %>% 
+  group_by(chapter) %>% 
+  slice_max(order_by = n, n = 5)
+
+ggplot(data = top_5_words, aes(x = n, y = word)) +
+  geom_col(fill = 'blue') +
+  facet_wrap(~ chapter, scales = 'free')
+```
+
+## Let's make a word cloud for Chapter 1
+
+```{r}
+ch1_top100 <- non_stop_counts %>% 
+  filter(chapter == 1) %>% 
+  slice_max(order_by = n, n = 100)
+
+ch1_cloud <- ggplot(data = ch1_top100, aes(label = word)) +
+  geom_text_wordcloud(aes(color = n, size = n), shape = 'diamond') +
+  scale_size_area(max_size = 6) +
+  scale_color_gradientn(colors = c('darkgreen', 'blue', 'purple'))
+ch1_cloud
+```
+
+## Sentiment Analysis
+
+### afinn lexicon
+
+Ranks each word in the lexicon on a scale from -5 (very negative) to +5 (very positive)
+
+```{r}
+afinn_lex <- get_sentiments(lexicon = 'afinn')
+
+afinn_pos <- get_sentiments(lexicon = 'afinn') %>% 
+  filter(value %in% c(3, 4, 5))
+
+DT::datatable(afinn_pos)
+
+```
+
+
+### bing lexicon
+
+Binary scoring of words, either positive or negative
+```{r}
+bing_lex <- get_sentiments(lexicon = 'bing')
+```
+
+### nrc lexicon
+
+National Resource of Canada - catergorizes each word into bins of different emotional category
+
+```{r}
+nrc_lex <- get_sentiments(lexicon = 'nrc')
+```
+
+
+### Sentiment analysis with afinn:
+
+First inner join the lexicon to the word data frame
+
+```{r}
+hobbit_afinn <- hobbit_words_clean %>% 
+  inner_join(afinn_lex, by = 'word')
+
+afinn_counts <- hobbit_afinn %>% 
+  group_by(chapter, value) %>% 
+  summarize(n = n())
+
+ggplot(afinn_counts, aes(x = value, y = n)) +
+  geom_col() +
+  facet_wrap(~chapter)
+
+afinn_means <- hobbit_afinn %>% 
+  group_by(chapter) %>% 
+  summarize(mean_afinn = mean(value))
+
+ggplot(data = afinn_means,
+       aes(x = mean_afinn, y = fct_rev(factor(chapter)))) +
+  geom_col() +
+  labs(y = 'chapter') +
+  theme_classic()
+
+```
+
+### Sentiment analysis with Bing
+
+```{r}
+hobbit_bing <- hobbit_words_clean %>% 
+  inner_join(bing_lex, by = 'word')
+
+bing_counts <- hobbit_bing %>% 
+  count(chapter, sentiment)
+
+ggplot(data = bing_counts, aes(x = sentiment, y = n)) +
+  geom_col()+
+  facet_wrap(~chapter)
+
+### find log positive to negative ratio
+bing_log_ratio_book <- hobbit_bing %>% 
+  summarize(n_pos = sum(sentiment == 'positive'),
+            n_neg = sum(sentiment == 'negative'),
+            log_ratio = log(n_pos/n_neg))
+
+bing_log_ratio_chapter <- hobbit_bing %>% 
+  group_by(chapter) %>% 
+  summarize(n_pos = sum(sentiment == 'positive'),
+            n_neg = sum(sentiment == 'negative'),
+            log_ratio = log(n_pos/n_neg)) %>% 
+  mutate(log_ratio_adjust = log_ratio - bing_log_ratio_book$log_ratio) %>% 
+  mutate(pos_neg = ifelse(log_ratio_adjust > 0, 'pos', 'neg'))
+
+ggplot(data = bing_log_ratio_chapter,
+       aes(x = log_ratio_adjust,
+           y = fct_rev(factor(chapter)),
+           fill = pos_neg)) +
+  geom_col() +
+  labs(x = 'adjusted log (pos/neg)',
+       y = 'chapter') +
+  scale_fill_manual(values = c('pos' = 'slateblue', 'neg' = 'darkred')) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+### Sentiment analysis with NRC lexicon
+
+```{r}
+hobbit_nrc <- hobbit_words_clean %>% 
+  inner_join(nrc_lex, by = 'word')
+
+nrc_counts <- hobbit_nrc %>% 
+  count(chapter, sentiment)
+
+ggplot(data = nrc_counts, aes(x = n, y = sentiment)) +
+  geom_col() +
+  facet_wrap(~chapter)
+### ideas to make this plot better, instead of arranging these words in alphabetical order, you can group them by negative and positive and make them a factor and color them based on pos/neg
+
+ggplot(nrc_counts, aes(x = n, y = factor(chapter) %>% fct_rev())) +
+  geom_col() +
+  facet_wrap(~ sentiment) +
+  labs( y = 'chapter')
+```
+
+
+there is another lexicon called "loughran" that is more for business/finance
+
+can create your own lexicon if needed for analysis, discipline specific
+
+
+
+
+
+
+
+
+
+
+
